@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Well Monitor — Voltage Source",
+        "description": "Select the sensor entity that reports the raw voltage from your depth sensor.",
+        "data": {
+          "voltage_entity": "Voltage sensor entity"
+        },
+        "data_description": {
+          "voltage_entity": "The HA sensor entity that provides the raw analogue voltage from your depth/pressure transducer."
+        }
+      },
+      "calibration": {
+        "title": "Well Monitor — Calibration",
+        "description": "Enter two known voltage/depth pairs to calibrate the linear depth scale.\n\nMeasure the actual water column height at two different well levels and record the corresponding sensor voltages.",
+        "data": {
+          "cal_voltage_low":  "Low reference voltage (V)",
+          "cal_depth_low":    "Water depth at low reference (m)",
+          "cal_voltage_high": "High reference voltage (V)",
+          "cal_depth_high":   "Water depth at high reference (m)"
+        },
+        "data_description": {
+          "cal_voltage_low":  "Sensor voltage when the water column depth equals the low reference value (often 0 V at empty).",
+          "cal_depth_low":    "Actual water column depth in metres at the low reference voltage (often 0.0 m).",
+          "cal_voltage_high": "Sensor voltage at a known, higher water level.",
+          "cal_depth_high":   "Actual water column depth in metres at the high reference voltage."
+        }
+      },
+      "geometry": {
+        "title": "Well Monitor — Well Geometry & Filtering",
+        "description": "The well is assumed to be a cylinder. Volume is calculated from water depth × cross-sectional area.\n\nMeasure the internal diameter of the borehole casing, not the drill diameter.",
+        "data": {
+          "well_diameter_mm": "Borehole internal diameter (mm)",
+          "ema_tau_seconds": "Smoothing time constant (seconds)"
+        },
+        "data_description": {
+          "well_diameter_mm": "Internal diameter of the borehole casing in millimetres. Common sizes: 75 mm (3\"), 100 mm (4\"), 125 mm (5\"), 150 mm (6\").",
+          "ema_tau_seconds": "Time constant (τ) for voltage smoothing in seconds (10–3600). Larger = smoother but slower to respond. After a gap longer than τ the new reading is trusted fully. 120s is a good starting point."
+        }
+      }
+    },
+    "error": {
+      "voltage_high_must_exceed_low": "High reference voltage must be greater than low reference voltage.",
+      "depth_high_must_exceed_low":   "High reference depth must be greater than low reference depth.",
+      "diameter_must_be_positive":    "Borehole diameter must be greater than zero."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Well Monitor — Reconfigure",
+        "description": "Update calibration or geometry. The integration will reload immediately.",
+        "data": {
+          "cal_voltage_low":  "Low reference voltage (V)",
+          "cal_depth_low":    "Water depth at low reference (m)",
+          "cal_voltage_high": "High reference voltage (V)",
+          "cal_depth_high":   "Water depth at high reference (m)",
+          "well_diameter_mm": "Borehole internal diameter (mm)",
+          "ema_tau_seconds":        "Smoothing time constant (seconds)"
+        }
+      }
+    }
+  }
+}
