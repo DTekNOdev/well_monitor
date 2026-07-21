@@ -1,4 +1,5 @@
 """Sensor platform for Well Monitor — one device, six sensors."""
+# Small change
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
