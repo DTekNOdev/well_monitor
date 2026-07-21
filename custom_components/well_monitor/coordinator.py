@@ -74,7 +74,7 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self.recharge_rate_lph: float | None = None  # max recharge rate in window
 
         # ── Persistence ───────────────────────────────────────────────────────
-        self._history_file = Path(hass.config.path()) / f"{DOMAIN}_history.json"
+        self._history_file = Path(hass.config.path(f"{DOMAIN}_history.json"))
         self._last_persist_time: float = 0.0
         self._load_history()
 
