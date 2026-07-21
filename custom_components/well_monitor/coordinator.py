@@ -1,9 +1,11 @@
 """DataUpdateCoordinator for Well Monitor."""
+import json
 import logging
 import math
 import time
 from collections import deque
 from datetime import timedelta
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, Event
@@ -25,6 +27,9 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# How often to persist history to disk (seconds)
+PERSIST_INTERVAL = 300  # 5 minutes
 
 
 class WellMonitorCoordinator(DataUpdateCoordinator):
@@ -67,6 +72,11 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         # ── Recharge rate tracking ────────────────────────────────────────────
         self._recharge_history: deque = deque(maxlen=2000)  # (time, volume, rate)
         self.recharge_rate_lph: float | None = None  # max recharge rate in window
+
+        # ── Persistence ───────────────────────────────────────────────────────
+        self._history_file = Path(hass.config.path) / f"{DOMAIN}_history.json"
+        self._last_persist_time: float = 0.0
+        self._load_history()
 
         # ── Published sensor values ───────────────────────────────────────────
         self.voltage:          float | None = None
@@ -159,15 +169,17 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self.volume_litres = round(volume, 1)
         self.level_pct     = round(level_pct, 1) if level_pct is not None else None
 
-        self._history.append((now_mono, self.volume_litres))
-        self.change_rate_lph = self._compute_rate(now_mono)
+        self._history.append((time.time(), self.volume_litres))
+        self.change_rate_lph = self._compute_rate(time.time())
 
         # Track positive rates for recharge rate computation
         if self.change_rate_lph is not None and self.change_rate_lph > 0:
             self._recharge_history.append(
-                (now_mono, self.volume_litres, self.change_rate_lph)
+                (time.time(), self.volume_litres, self.change_rate_lph)
             )
-        self.recharge_rate_lph = self._compute_recharge_rate(now_mono)
+        self.recharge_rate_lph = self._compute_recharge_rate(time.time())
+
+        self._save_history()
 
         _LOGGER.debug(
             "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), rate %.1f L/h, recharge %.1f L/h",
@@ -209,6 +221,47 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         if not positive:
             return None
         return round(max(positive), 1)
+
+    # ── Persistence ────────────────────────────────────────────────────────
+
+    def _load_history(self) -> None:
+        """Load history deques from disk."""
+        if not self._history_file.exists():
+            return
+        try:
+            data = json.loads(self._history_file.read_text())
+            now = time.time()
+            # Only load data within the retention windows
+            self._history = deque(
+                [(t, v) for t, v in data.get("history", []) if now - t < RATE_WINDOW_SECONDS],
+                maxlen=120,
+            )
+            self._recharge_history = deque(
+                [(t, v, r) for t, v, r in data.get("recharge_history", []) if now - t < RECHARGE_WINDOW_SECONDS],
+                maxlen=2000,
+            )
+            _LOGGER.debug(
+                "Well: loaded %d history, %d recharge samples",
+                len(self._history), len(self._recharge_history),
+            )
+        except Exception as exc:
+            _LOGGER.warning("Well: failed to load history: %s", exc)
+
+    def _save_history(self) -> None:
+        """Persist history deques to disk."""
+        now = time.time()
+        if now - self._last_persist_time < PERSIST_INTERVAL:
+            return
+        self._last_persist_time = now
+        try:
+            data = {
+                "history": list(self._history),
+                "recharge_history": list(self._recharge_history),
+            }
+            self._history_file.write_text(json.dumps(data))
+            _LOGGER.debug("Well: persisted history to disk")
+        except Exception as exc:
+            _LOGGER.warning("Well: failed to persist history: %s", exc)
 
     # ── Convenience properties used by fill-control automations ───────────────
 
