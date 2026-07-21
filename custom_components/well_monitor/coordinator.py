@@ -21,6 +21,7 @@ from .const import (
     CONF_EMA_TAU,
     DEFAULT_EMA_TAU,
     RATE_WINDOW_SECONDS,
+    RECHARGE_WINDOW_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,6 +63,10 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         # ── Rolling history for rate computation ──────────────────────────────
         self._history: deque = deque(maxlen=120)
         self._last_data_time: float = 0.0   # monotonic; 0 = no data yet
+
+        # ── Recharge rate tracking ────────────────────────────────────────────
+        self._recharge_history: deque = deque(maxlen=2000)  # (time, volume, rate)
+        self.recharge_rate_lph: float | None = None  # max recharge rate in window
 
         # ── Published sensor values ───────────────────────────────────────────
         self.voltage:          float | None = None
@@ -157,18 +162,27 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._history.append((now_mono, self.volume_litres))
         self.change_rate_lph = self._compute_rate(now_mono)
 
+        # Track positive rates for recharge rate computation
+        if self.change_rate_lph is not None and self.change_rate_lph > 0:
+            self._recharge_history.append(
+                (now_mono, self.volume_litres, self.change_rate_lph)
+            )
+        self.recharge_rate_lph = self._compute_recharge_rate(now_mono)
+
         _LOGGER.debug(
-            "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), rate %.1f L/h",
+            "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), rate %.1f L/h, recharge %.1f L/h",
             raw_voltage, voltage, self.depth_m,
-            self.volume_litres, self.level_pct or 0, self.change_rate_lph or 0,
+            self.volume_litres, self.level_pct or 0,
+            self.change_rate_lph or 0, self.recharge_rate_lph or 0,
         )
 
         return {
-            "voltage":         self.voltage,
-            "depth_m":         self.depth_m,
-            "volume_litres":   self.volume_litres,
-            "level_pct":       self.level_pct,
-            "change_rate_lph": self.change_rate_lph,
+            "voltage":          self.voltage,
+            "depth_m":          self.depth_m,
+            "volume_litres":    self.volume_litres,
+            "level_pct":        self.level_pct,
+            "change_rate_lph":  self.change_rate_lph,
+            "recharge_rate_lph": self.recharge_rate_lph,
         }
 
     def _compute_rate(self, now: float) -> float | None:
@@ -182,6 +196,19 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             return None
         delta = window[-1][1] - window[0][1]
         return round(delta / elapsed_hours, 1)
+
+    def _compute_recharge_rate(self, now: float) -> float | None:
+        """Maximum positive recharge rate over the last RECHARGE_WINDOW_SECONDS.
+
+        Only samples where rate > 0 are considered (natural recovery periods).
+        Returns the maximum observed rate, which represents the fastest
+        recharge when the well is lowest.
+        """
+        cutoff = now - RECHARGE_WINDOW_SECONDS
+        positive = [r for t, _, r in self._recharge_history if t >= cutoff and r > 0]
+        if not positive:
+            return None
+        return round(max(positive), 1)
 
     # ── Convenience properties used by fill-control automations ───────────────
 

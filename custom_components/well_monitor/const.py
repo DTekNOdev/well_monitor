@@ -21,4 +21,7 @@ DEVICE_MANUFACTURER = "DTekNO"
 DEVICE_MODEL        = "Borehole Depth Sensor"
 
 # Rolling window used to compute fill / drain rate
-RATE_WINDOW_SECONDS = 600   # 10 minutes
+RATE_WINDOW_SECONDS = 1800   # 30 minutes
+
+# Window for computing natural recharge rate (longer for smoothing)
+RECHARGE_WINDOW_SECONDS = 86400   # 24 hours

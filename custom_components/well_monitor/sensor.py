@@ -1,4 +1,4 @@
-"""Sensor platform for Well Monitor — one device, five sensors."""
+"""Sensor platform for Well Monitor — one device, six sensors."""
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
@@ -28,6 +28,7 @@ async def async_setup_entry(
         WellVolumeSensor(coordinator, entry),
         WellLevelSensor(coordinator, entry),
         WellRateSensor(coordinator, entry),
+        WellRechargeRateSensor(coordinator, entry),
     ])
 
 
@@ -159,3 +160,33 @@ class WellRateSensor(_WellBase):
         else:
             direction = "stable"
         return {"direction": direction}
+
+
+class WellRechargeRateSensor(_WellBase):
+    """Maximum natural recharge rate observed over the last 24 hours (L/h).
+
+    Only samples during positive-rate (recovery) periods are considered.
+    The maximum gives the fastest recharge when the well is lowest.
+    """
+
+    _attr_name                       = "Recharge Rate"
+    _attr_native_unit_of_measurement = "L/h"
+    _attr_state_class                = SensorStateClass.MEASUREMENT
+    _attr_icon                       = "mdi:water-plus"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "recharge_rate")
+
+    @property
+    def native_value(self):
+        return self.coordinator.recharge_rate_lph
+
+    @property
+    def extra_state_attributes(self):
+        rate = self.coordinator.recharge_rate_lph
+        if rate is None:
+            return {}
+        return {
+            "window_hours": 24,
+            "description": "Max recharge rate during recovery periods",
+        }
