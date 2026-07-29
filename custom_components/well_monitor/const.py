@@ -32,10 +32,15 @@ RECHARGE_WINDOW_SECONDS = 86400   # 24 hours
 DEFAULT_LONG_RATE_WINDOW    = 86400     # 24 hours
 DEFAULT_WATER_TABLE_WINDOW  = 604800    # 7 days
 
-# Outlier rejection — max voltage change per update considered physically plausible
-# At 10 L/min discharge → 0.1 V/min. A 0.02V jump in 1 min is noise.
-MAX_VOLTAGE_JUMP = 0.015   # volts — reject single spikes above this
+# Outlier rejection — max physically plausible rate (L/h) in each direction.
+# A reading that implies a rate exceeding these limits is rejected as a
+# sensor spike, unless it persists for several consecutive updates.
+CONF_MAX_RECHARGE_RATE  = "max_recharge_rate_lph"    # L/h  (filling)
+CONF_MAX_DISCHARGE_RATE = "max_discharge_rate_lph"   # L/h  (draining)
 
-# If N consecutive readings all exceed the jump threshold, accept the change
-# as a real persistent shift (e.g. after recalibration).
+DEFAULT_MAX_RECHARGE_RATE  = 20    # L/h  — well recovery
+DEFAULT_MAX_DISCHARGE_RATE = 600   # L/h  — pump draw (10 L/min)
+
+# If N consecutive readings all exceed the rate limit, accept the change
+# as a real persistent shift (e.g. after recalibration or pump change).
 CONSECUTIVE_OUTLIER_LIMIT = 5   # ~5 minutes of persistent deviation

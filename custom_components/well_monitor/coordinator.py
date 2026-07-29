@@ -22,14 +22,17 @@ from .const import (
     CONF_WELL_DIAMETER_MM,
     CONF_EMA_TAU,
     DEFAULT_EMA_TAU,
-    MAX_VOLTAGE_JUMP,
     CONSECUTIVE_OUTLIER_LIMIT,
     RATE_WINDOW_SECONDS,
     RECHARGE_WINDOW_SECONDS,
     CONF_LONG_RATE_WINDOW,
     CONF_WATER_TABLE_WINDOW,
+    CONF_MAX_RECHARGE_RATE,
+    CONF_MAX_DISCHARGE_RATE,
     DEFAULT_LONG_RATE_WINDOW,
     DEFAULT_WATER_TABLE_WINDOW,
+    DEFAULT_MAX_RECHARGE_RATE,
+    DEFAULT_MAX_DISCHARGE_RATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,6 +73,10 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._ema_tau: float = float(cfg.get(CONF_EMA_TAU, DEFAULT_EMA_TAU))
         self._ema_voltage: float | None = None
         self._last_voltage_time: float | None = None  # monotonic seconds
+
+        # ── Outlier rejection limits (L/h) ───────────────────────────────────
+        self._max_recharge_rate: float = float(cfg.get(CONF_MAX_RECHARGE_RATE, DEFAULT_MAX_RECHARGE_RATE))
+        self._max_discharge_rate: float = float(cfg.get(CONF_MAX_DISCHARGE_RATE, DEFAULT_MAX_DISCHARGE_RATE))
 
         # ── Long-term windows ────────────────────────────────────────────────
         self._long_rate_window: float = float(cfg.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW))
@@ -170,10 +177,12 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
                 f"Cannot parse voltage value '{state.state}'"
             ) from exc
 
-        # Time-weighted EMA with outlier rejection.
-        # Rejects single spikes > MAX_VOLTAGE_JUMP unless the deviation
-        # persists for CONSECUTIVE_OUTLIER_LIMIT consecutive readings
-        # (handles recalibration or sensor drift without manual intervention).
+        # Time-weighted EMA with rate-based outlier rejection.
+        # Computes the implied rate of change from the voltage delta and
+        # calibration; rejects if it exceeds the configured max for that
+        # direction (filling or draining).  If the deviation persists for
+        # CONSECUTIVE_OUTLIER_LIMIT readings, it is accepted as a real
+        # change (handles recalibration or pump modification).
         now_mono = time.monotonic()
         if self._ema_voltage is None or self._last_voltage_time is None:
             self._ema_voltage = raw_voltage
@@ -181,27 +190,30 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             self._last_voltage_time = now_mono
             self._last_data_time = now_mono
         else:
-            deviation = abs(raw_voltage - self._ema_voltage)
+            dt = now_mono - self._last_voltage_time
+            delta_v = raw_voltage - self._ema_voltage
+            # implied_rate = delta_V × m/V × L/m ÷ (dt / 3600)
+            implied_rate = delta_v * self._depth_scale * self._litres_per_metre / (dt / 3600.0)
+            max_rate = self._max_recharge_rate if implied_rate > 0 else self._max_discharge_rate
             accept = True
-            if deviation > MAX_VOLTAGE_JUMP:
+            if abs(implied_rate) > max_rate:
                 self._consecutive_outliers += 1
                 if self._consecutive_outliers >= CONSECUTIVE_OUTLIER_LIMIT:
                     self._consecutive_outliers = 0
                     _LOGGER.debug(
-                        "Well: persistent jump %.4fV accepted after %d outliers",
-                        deviation, CONSECUTIVE_OUTLIER_LIMIT,
+                        "Well: persistent %.0f L/h accepted after %d outliers",
+                        implied_rate, CONSECUTIVE_OUTLIER_LIMIT,
                     )
                 else:
                     accept = False
                     _LOGGER.debug(
-                        "Well: outlier ±%.4fV rejected (outlier #%d)",
-                        deviation, self._consecutive_outliers,
+                        "Well: outlier %.0f L/h rejected (max %d, outlier #%d)",
+                        implied_rate, int(max_rate), self._consecutive_outliers,
                     )
             else:
                 self._consecutive_outliers = 0
 
             if accept:
-                dt = now_mono - self._last_voltage_time
                 alpha_t = 1.0 - math.exp(-dt / self._ema_tau)
                 self._ema_voltage = alpha_t * raw_voltage + (1.0 - alpha_t) * self._ema_voltage
                 self._last_voltage_time = now_mono
