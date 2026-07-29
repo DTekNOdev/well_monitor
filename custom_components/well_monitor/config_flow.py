@@ -16,10 +16,14 @@ from .const import (
     CONF_CAL_DEPTH_HIGH,
     CONF_WELL_DIAMETER_MM,
     CONF_EMA_TAU,
+    CONF_LONG_RATE_WINDOW,
+    CONF_WATER_TABLE_WINDOW,
     DEFAULT_CAL_VOLTAGE_LOW,
     DEFAULT_CAL_DEPTH_LOW,
     DEFAULT_WELL_DIAMETER_MM,
     DEFAULT_EMA_TAU,
+    DEFAULT_LONG_RATE_WINDOW,
+    DEFAULT_WATER_TABLE_WINDOW,
 )
 
 
@@ -153,10 +157,12 @@ class WellMonitorOptionsFlow(config_entries.OptionsFlow):
 
     def _schema(self, defaults: dict) -> vol.Schema:
         return vol.Schema({
-            vol.Required(CONF_CAL_VOLTAGE_LOW,  default=defaults.get(CONF_CAL_VOLTAGE_LOW,  DEFAULT_CAL_VOLTAGE_LOW)):  vol.Coerce(float),
-            vol.Required(CONF_CAL_DEPTH_LOW,    default=defaults.get(CONF_CAL_DEPTH_LOW,    DEFAULT_CAL_DEPTH_LOW)):    vol.Coerce(float),
-            vol.Required(CONF_CAL_VOLTAGE_HIGH, default=defaults.get(CONF_CAL_VOLTAGE_HIGH, 1.0)):                      vol.Coerce(float),
-            vol.Required(CONF_CAL_DEPTH_HIGH,   default=defaults.get(CONF_CAL_DEPTH_HIGH,   5.0)):                      vol.Coerce(float),
-            vol.Required(CONF_WELL_DIAMETER_MM, default=defaults.get(CONF_WELL_DIAMETER_MM, DEFAULT_WELL_DIAMETER_MM)): vol.Coerce(float),
-            vol.Required(CONF_EMA_TAU,          default=defaults.get(CONF_EMA_TAU,          DEFAULT_EMA_TAU)):          vol.All(vol.Coerce(float), vol.Range(min=10, max=3600)),
+            vol.Required(CONF_CAL_VOLTAGE_LOW,    default=defaults.get(CONF_CAL_VOLTAGE_LOW,  DEFAULT_CAL_VOLTAGE_LOW)):    vol.Coerce(float),
+            vol.Required(CONF_CAL_DEPTH_LOW,      default=defaults.get(CONF_CAL_DEPTH_LOW,    DEFAULT_CAL_DEPTH_LOW)):      vol.Coerce(float),
+            vol.Required(CONF_CAL_VOLTAGE_HIGH,   default=defaults.get(CONF_CAL_VOLTAGE_HIGH, 1.0)):                        vol.Coerce(float),
+            vol.Required(CONF_CAL_DEPTH_HIGH,     default=defaults.get(CONF_CAL_DEPTH_HIGH,   5.0)):                        vol.Coerce(float),
+            vol.Required(CONF_WELL_DIAMETER_MM,   default=defaults.get(CONF_WELL_DIAMETER_MM, DEFAULT_WELL_DIAMETER_MM)):   vol.Coerce(float),
+            vol.Required(CONF_EMA_TAU,            default=defaults.get(CONF_EMA_TAU,          DEFAULT_EMA_TAU)):            vol.All(vol.Coerce(float), vol.Range(min=10, max=3600)),
+            vol.Optional(CONF_LONG_RATE_WINDOW,   default=defaults.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW)):   vol.All(vol.Coerce(float), vol.Range(min=3600, max=604800)),
+            vol.Optional(CONF_WATER_TABLE_WINDOW, default=defaults.get(CONF_WATER_TABLE_WINDOW, DEFAULT_WATER_TABLE_WINDOW)): vol.All(vol.Coerce(float), vol.Range(min=86400, max=2592000)),
         })

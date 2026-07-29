@@ -24,6 +24,10 @@ from .const import (
     DEFAULT_EMA_TAU,
     RATE_WINDOW_SECONDS,
     RECHARGE_WINDOW_SECONDS,
+    CONF_LONG_RATE_WINDOW,
+    CONF_WATER_TABLE_WINDOW,
+    DEFAULT_LONG_RATE_WINDOW,
+    DEFAULT_WATER_TABLE_WINDOW,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +69,13 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._ema_voltage: float | None = None
         self._last_voltage_time: float | None = None  # monotonic seconds
 
+        # ── Long-term windows ────────────────────────────────────────────────
+        self._long_rate_window: float = float(cfg.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW))
+        self._water_table_window: float = float(cfg.get(CONF_WATER_TABLE_WINDOW, DEFAULT_WATER_TABLE_WINDOW))
+        # Cap volume history at ~7 days of 1-min data
+        max_vol_entries = int(self._water_table_window / 60) + 100
+        self._volume_history: deque = deque(maxlen=max_vol_entries)  # (time, volume_litres, depth_m)
+
         # ── Rolling history for rate computation ──────────────────────────────
         self._history: deque = deque(maxlen=120)
         self._last_data_time: float = 0.0   # monotonic; 0 = no data yet
@@ -76,14 +87,17 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         # ── Persistence ───────────────────────────────────────────────────────
         self._history_file = Path(hass.config.path(f"{DOMAIN}_history.json"))
         self._last_persist_time: float = 0.0
-        self._load_history()
+        self._history_loaded: bool = False
 
         # ── Published sensor values ───────────────────────────────────────────
-        self.voltage:          float | None = None
-        self.depth_m:          float | None = None
-        self.volume_litres:    float | None = None
-        self.level_pct:        float | None = None
-        self.change_rate_lph:  float | None = None  # L/h; +ve = filling, -ve = draining
+        self.voltage:            float | None = None
+        self.depth_m:            float | None = None
+        self.volume_litres:      float | None = None
+        self.level_pct:          float | None = None
+        self.change_rate_lph:    float | None = None  # L/h; short-term rolling
+        self.long_term_rate_lph: float | None = None  # L/h; persists when idle
+        self.water_table_volume: float | None = None  # L; rolling max volume
+        self.water_table_depth:  float | None = None  # m; depth at max volume
 
         # No background poll — driven by state-change events.
         super().__init__(
@@ -118,7 +132,10 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         await self.async_request_refresh()
 
     async def _check_stale_rate(self, _now=None) -> None:
-        """Zero the change rate if no reading has arrived within the rate window."""
+        """Zero the short-term rate if no reading has arrived within the rate window.
+
+        The long-term rate is preserved so it does not decay during idle periods.
+        """
         if self._last_data_time == 0.0:
             return  # never had a reading yet
         if time.monotonic() - self._last_data_time > RATE_WINDOW_SECONDS:
@@ -133,6 +150,8 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
     # ──────────────────────────────────────────────────────────────────────────
 
     async def _async_update_data(self) -> dict:
+        if not self._history_loaded:
+            await self._load_history()
         state = self.hass.states.get(self._voltage_entity)
         if state is None or state.state in ("unknown", "unavailable", ""):
             raise UpdateFailed(
@@ -169,32 +188,43 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self.volume_litres = round(volume, 1)
         self.level_pct     = round(level_pct, 1) if level_pct is not None else None
 
-        self._history.append((time.time(), self.volume_litres))
-        self.change_rate_lph = self._compute_rate(time.time())
+        now_ts = time.time()
+        self._history.append((now_ts, self.volume_litres))
+        self.change_rate_lph = self._compute_rate(now_ts)
 
         # Track positive rates for recharge rate computation
         if self.change_rate_lph is not None and self.change_rate_lph > 0:
             self._recharge_history.append(
-                (time.time(), self.volume_litres, self.change_rate_lph)
+                (now_ts, self.volume_litres, self.change_rate_lph)
             )
-        self.recharge_rate_lph = self._compute_recharge_rate(time.time())
+        self.recharge_rate_lph = self._compute_recharge_rate(now_ts)
 
-        self._save_history()
+        # ── Long-term volume history ──────────────────────────────────────────
+        self._volume_history.append((now_ts, self.volume_litres, self.depth_m))
+        self.long_term_rate_lph = self._compute_long_term_rate(now_ts)
+        self.water_table_volume, self.water_table_depth = self._compute_water_table(now_ts)
+
+        await self._save_history()
 
         _LOGGER.debug(
-            "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), rate %.1f L/h, recharge %.1f L/h",
+            "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), "
+            "rate=%.1f L/h long=%.1f L/h recharge=%.1f L/h table=%.1fL",
             raw_voltage, voltage, self.depth_m,
             self.volume_litres, self.level_pct or 0,
-            self.change_rate_lph or 0, self.recharge_rate_lph or 0,
+            self.change_rate_lph or 0, self.long_term_rate_lph or 0,
+            self.recharge_rate_lph or 0, self.water_table_volume or 0,
         )
 
         return {
-            "voltage":          self.voltage,
-            "depth_m":          self.depth_m,
-            "volume_litres":    self.volume_litres,
-            "level_pct":        self.level_pct,
-            "change_rate_lph":  self.change_rate_lph,
-            "recharge_rate_lph": self.recharge_rate_lph,
+            "voltage":            self.voltage,
+            "depth_m":            self.depth_m,
+            "volume_litres":      self.volume_litres,
+            "level_pct":          self.level_pct,
+            "change_rate_lph":    self.change_rate_lph,
+            "recharge_rate_lph":  self.recharge_rate_lph,
+            "long_term_rate_lph": self.long_term_rate_lph,
+            "water_table_volume": self.water_table_volume,
+            "water_table_depth":  self.water_table_depth,
         }
 
     def _compute_rate(self, now: float) -> float | None:
@@ -222,43 +252,98 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             return None
         return round(max(positive), 1)
 
-    # ── Persistence ────────────────────────────────────────────────────────
+    def _compute_long_term_rate(self, now: float) -> float | None:
+        """L/h over the long-term window.
 
-    def _load_history(self) -> None:
+        Unlike the short-term rate, this keeps its last known value when the
+        window has too few data points (well idle), so it does not decay.
+        """
+        cutoff = now - self._long_rate_window
+        window = [(t, v) for t, v in self._history if t >= cutoff]
+        if len(window) >= 2:
+            elapsed_hours = (window[-1][0] - window[0][0]) / 3600.0
+            if elapsed_hours >= 1e-6:
+                delta = window[-1][1] - window[0][1]
+                self.long_term_rate_lph = round(delta / elapsed_hours, 1)
+        return self.long_term_rate_lph
+
+    def _compute_water_table(self, now: float) -> tuple[float | None, float | None]:
+        """Rolling maximum volume and its corresponding depth over the water-table window.
+
+        This reflects the natural groundwater level: the highest the water has
+        been during the window (typically when the well is at rest).
+        """
+        cutoff = now - self._water_table_window
+        max_vol: float | None = None
+        max_depth: float | None = None
+        while self._volume_history:
+            t, v, d = self._volume_history[0]
+            if t >= cutoff:
+                break
+            self._volume_history.popleft()
+        for _, v, d in self._volume_history:
+            if max_vol is None or v > max_vol:
+                max_vol = v
+                max_depth = d
+        return (max_vol, max_depth)
+
+    # ── Persistence ────────────────────────────────────────
+
+    async def _load_history(self) -> None:
         """Load history deques from disk."""
-        if not self._history_file.exists():
-            return
+        def _read():
+            if not self._history_file.exists():
+                return None
+            return json.loads(self._history_file.read_text())
+
         try:
-            data = json.loads(self._history_file.read_text())
-            now = time.time()
-            # Only load data within the retention windows
-            self._history = deque(
-                [(t, v) for t, v in data.get("history", []) if now - t < RATE_WINDOW_SECONDS],
-                maxlen=120,
-            )
-            self._recharge_history = deque(
-                [(t, v, r) for t, v, r in data.get("recharge_history", []) if now - t < RECHARGE_WINDOW_SECONDS],
-                maxlen=2000,
-            )
-            _LOGGER.debug(
-                "Well: loaded %d history, %d recharge samples",
-                len(self._history), len(self._recharge_history),
-            )
+            data = await self.hass.async_add_executor_job(_read)
         except Exception as exc:
             _LOGGER.warning("Well: failed to load history: %s", exc)
+            self._history_loaded = True
+            return
 
-    def _save_history(self) -> None:
+        if data is None:
+            self._history_loaded = True
+            return
+
+        now = time.time()
+        # Only load data within the retention windows
+        self._history = deque(
+            [(t, v) for t, v in data.get("history", []) if now - t < RATE_WINDOW_SECONDS],
+            maxlen=120,
+        )
+        self._recharge_history = deque(
+            [(t, v, r) for t, v, r in data.get("recharge_history", []) if now - t < RECHARGE_WINDOW_SECONDS],
+            maxlen=2000,
+        )
+        self._volume_history = deque(
+            [(t, v, d) for t, v, d in data.get("volume_history", []) if now - t < self._water_table_window],
+            maxlen=self._volume_history.maxlen,
+        )
+        self._history_loaded = True
+        _LOGGER.debug(
+            "Well: loaded %d history, %d recharge, %d volume samples",
+            len(self._history), len(self._recharge_history), len(self._volume_history),
+        )
+
+    async def _save_history(self) -> None:
         """Persist history deques to disk."""
         now = time.time()
         if now - self._last_persist_time < PERSIST_INTERVAL:
             return
         self._last_persist_time = now
-        try:
-            data = {
-                "history": list(self._history),
-                "recharge_history": list(self._recharge_history),
-            }
+        data = {
+            "history": list(self._history),
+            "recharge_history": list(self._recharge_history),
+            "volume_history": list(self._volume_history),
+        }
+
+        def _write():
             self._history_file.write_text(json.dumps(data))
+
+        try:
+            await self.hass.async_add_executor_job(_write)
             _LOGGER.debug("Well: persisted history to disk")
         except Exception as exc:
             _LOGGER.warning("Well: failed to persist history: %s", exc)

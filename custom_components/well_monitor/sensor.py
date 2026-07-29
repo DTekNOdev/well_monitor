@@ -1,5 +1,4 @@
-"""Sensor platform for Well Monitor — one device, six sensors."""
-# Small change
+"""Sensor platform for Well Monitor — one device, eight sensors."""
 from __future__ import annotations
 
 from homeassistant.components.sensor import (
@@ -30,6 +29,8 @@ async def async_setup_entry(
         WellLevelSensor(coordinator, entry),
         WellRateSensor(coordinator, entry),
         WellRechargeRateSensor(coordinator, entry),
+        WellLongTermRateSensor(coordinator, entry),
+        WellWaterTableSensor(coordinator, entry),
     ])
 
 
@@ -191,3 +192,46 @@ class WellRechargeRateSensor(_WellBase):
             "window_hours": 24,
             "description": "Max recharge rate during recovery periods",
         }
+
+
+class WellLongTermRateSensor(_WellBase):
+    """Persistent long-term rate of change (L/h).
+
+    Unlike the short-term change rate, this value does not decay to zero when
+    the well is idle. It only updates when there are enough data points in the
+    long window, and otherwise holds its last computed value.
+    """
+
+    _attr_name                       = "Long Term Rate"
+    _attr_native_unit_of_measurement = "L/h"
+    _attr_state_class                = SensorStateClass.MEASUREMENT
+    _attr_icon                       = "mdi:chart-timeline-variant"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "long_term_rate")
+
+    @property
+    def native_value(self):
+        return self.coordinator.long_term_rate_lph
+
+
+class WellWaterTableSensor(_WellBase):
+    """Rolling maximum water volume over the water-table window (L).
+
+    Represents the natural groundwater level: the highest the water has been
+    during the tracking window (typically when the well is at rest and fully
+    recharged).
+    """
+
+    _attr_name                       = "Water Table"
+    _attr_native_unit_of_measurement = "L"
+    _attr_device_class               = SensorDeviceClass.VOLUME_STORAGE
+    _attr_state_class                = SensorStateClass.MEASUREMENT
+    _attr_icon                       = "mdi:waves"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "water_table")
+
+    @property
+    def native_value(self):
+        return self.coordinator.water_table_volume
