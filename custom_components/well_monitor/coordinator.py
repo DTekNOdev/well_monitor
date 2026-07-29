@@ -22,6 +22,8 @@ from .const import (
     CONF_WELL_DIAMETER_MM,
     CONF_EMA_TAU,
     DEFAULT_EMA_TAU,
+    MAX_VOLTAGE_JUMP,
+    CONSECUTIVE_OUTLIER_LIMIT,
     RATE_WINDOW_SECONDS,
     RECHARGE_WINDOW_SECONDS,
     CONF_LONG_RATE_WINDOW,
@@ -88,6 +90,9 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._history_file = Path(hass.config.path(f"{DOMAIN}_history.json"))
         self._last_persist_time: float = 0.0
         self._history_loaded: bool = False
+
+        # ── Outlier rejection ──────────────────────────────────────────────────
+        self._consecutive_outliers: int = 0
 
         # ── Published sensor values ───────────────────────────────────────────
         self.voltage:            float | None = None
@@ -165,16 +170,42 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
                 f"Cannot parse voltage value '{state.state}'"
             ) from exc
 
-        # Time-weighted EMA: seed on first reading; weight by elapsed time after that.
+        # Time-weighted EMA with outlier rejection.
+        # Rejects single spikes > MAX_VOLTAGE_JUMP unless the deviation
+        # persists for CONSECUTIVE_OUTLIER_LIMIT consecutive readings
+        # (handles recalibration or sensor drift without manual intervention).
         now_mono = time.monotonic()
         if self._ema_voltage is None or self._last_voltage_time is None:
             self._ema_voltage = raw_voltage
+            self._consecutive_outliers = 0
+            self._last_voltage_time = now_mono
+            self._last_data_time = now_mono
         else:
-            dt = now_mono - self._last_voltage_time
-            alpha_t = 1.0 - math.exp(-dt / self._ema_tau)
-            self._ema_voltage = alpha_t * raw_voltage + (1.0 - alpha_t) * self._ema_voltage
-        self._last_voltage_time = now_mono
-        self._last_data_time = now_mono
+            deviation = abs(raw_voltage - self._ema_voltage)
+            accept = True
+            if deviation > MAX_VOLTAGE_JUMP:
+                self._consecutive_outliers += 1
+                if self._consecutive_outliers >= CONSECUTIVE_OUTLIER_LIMIT:
+                    self._consecutive_outliers = 0
+                    _LOGGER.debug(
+                        "Well: persistent jump %.4fV accepted after %d outliers",
+                        deviation, CONSECUTIVE_OUTLIER_LIMIT,
+                    )
+                else:
+                    accept = False
+                    _LOGGER.debug(
+                        "Well: outlier ±%.4fV rejected (outlier #%d)",
+                        deviation, self._consecutive_outliers,
+                    )
+            else:
+                self._consecutive_outliers = 0
+
+            if accept:
+                dt = now_mono - self._last_voltage_time
+                alpha_t = 1.0 - math.exp(-dt / self._ema_tau)
+                self._ema_voltage = alpha_t * raw_voltage + (1.0 - alpha_t) * self._ema_voltage
+                self._last_voltage_time = now_mono
+                self._last_data_time = now_mono
 
         voltage = self._ema_voltage
 

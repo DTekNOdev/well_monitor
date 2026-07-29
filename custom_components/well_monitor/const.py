@@ -31,3 +31,11 @@ RECHARGE_WINDOW_SECONDS = 86400   # 24 hours
 # Default windows for long-term rate and water table
 DEFAULT_LONG_RATE_WINDOW    = 86400     # 24 hours
 DEFAULT_WATER_TABLE_WINDOW  = 604800    # 7 days
+
+# Outlier rejection — max voltage change per update considered physically plausible
+# At 10 L/min discharge → 0.1 V/min. A 0.02V jump in 1 min is noise.
+MAX_VOLTAGE_JUMP = 0.015   # volts — reject single spikes above this
+
+# If N consecutive readings all exceed the jump threshold, accept the change
+# as a real persistent shift (e.g. after recalibration).
+CONSECUTIVE_OUTLIER_LIMIT = 5   # ~5 minutes of persistent deviation
