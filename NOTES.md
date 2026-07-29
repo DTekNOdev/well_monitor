@@ -21,33 +21,35 @@ Original multiplier in configuration.yaml templates was `6.5455` — slight disc
 
 Raw entity: `sensor.well_monitor_analog_input_2_voltage_measurement`
 
-### Current filter (configuration.yaml)
+The integration now reads the **raw** voltage entity directly and applies an internal
+time-weighted EMA filter (`tau = 300s` default). The old lowpass+SMA filter sensor
+has been removed from configuration.
 
-```yaml
-- platform: filter
-  name: "filtered well monitor voltage measurement"
-  entity_id: sensor.well_monitor_analog_input_2_voltage_measurement
-  unique_id: ed2771e3-ae2c-40c9-a7ed-cb6a9eae8adb
-  filters:
-    - filter: lowpass
-      time_constant: 4
-    - filter: time_simple_moving_average
-      window_size: "00:05"
-      precision: 2
-```
-
-Works well but is slow — the 5-minute SMA introduces ~7-minute effective lag on the derived rate sensor,
-making fill/drain detection sluggish.
-
-### Preferred approach
-
-Point the integration at the **raw** entity and let the coordinator apply an internal EMA:
+### Filter approach
 
 ```
-ema = alpha × new_voltage + (1 − alpha) × ema
+ema = alpha_t × raw + (1 − alpha_t) × ema
+alpha_t = 1 − exp(−dt / tau)
 ```
 
-`alpha ≈ 0.2` gives comparable smoothing with much faster response to genuine level changes,
-and the rate computation benefits directly from the reduced lag.
+Long gap → alpha_t → 1.0 (trust new reading fully), short gap → alpha_t → 0 (suppress noise).
 
-If switching to raw input, the configuration.yaml filter sensor can be retired.
+## Sensors
+
+The integration publishes 8 sensors under a single device:
+
+| Sensor | Unit | Notes |
+|---|---|---|
+| Voltage | V | EMA-filtered voltage; hidden by default |
+| Water Depth | m | Calibrated water column height |
+| Water Volume | L | Depth × cylindrical cross-section |
+| Water Level | % | Depth as fraction of calibrated max |
+| Change Rate | L/h | Short-term rolling window (30 min); decays to 0 when idle |
+| Recharge Rate | L/h | Max positive rate in a 24h window |
+| Long Term Rate | L/h | Full-window rate; preserves last value when idle (no decay) |
+| Water Table | L | Rolling max volume over 7 days (groundwater level) |
+
+## Persistence
+
+History is saved to `well_monitor_history.json` every 5 minutes and reloaded on restart,
+so rate sensors recover their pre-restart state.

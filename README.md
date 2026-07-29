@@ -8,18 +8,21 @@ A Home Assistant custom integration for monitoring a borehole / well using a sub
 - **Cylindrical volume estimation** — volume in litres from water depth and borehole diameter
 - **Rolling fill/drain rate** — rate of change over a 10-minute window (L/h), positive = filling, negative = draining
 - **Reactive updates** — no separate poll interval; the coordinator updates whenever the source voltage entity changes state (e.g. driven by Z-Wave or SmartThings)
-- **Single device** — all five sensors appear under one device in the HA device registry
+- **Single device** — all eight sensors appear under one device in the HA device registry
 - **Reconfigurable** — calibration and geometry can be updated via the options flow without re-adding the integration
 
 ## Sensors
 
 | Sensor | Unit | Notes |
 |---|---|---|
+| Voltage | V | EMA-filtered sensor voltage; hidden by default |
 | Water Depth | m | Calibrated height of water column |
 | Water Volume | L | Depth × cylindrical cross-section |
 | Water Level | % | Depth as fraction of calibrated maximum |
-| Change Rate | L/h | 10-minute rolling average; positive = filling |
-| Voltage | V | Raw sensor voltage; hidden by default, enable for diagnostics |
+| Change Rate | L/h | Short-term rolling window (30 min); decays to 0 when idle |
+| Recharge Rate | L/h | Max positive rate in a 24h window |
+| Long Term Rate | L/h | Full-window rate; preserves last value when idle (no decay) |
+| Water Table | L | Rolling max volume over 7 days (groundwater level) |
 
 The Change Rate sensor also exposes a `direction` attribute: `filling`, `draining`, or `stable` (< 0.5 L/h deadband).
 
