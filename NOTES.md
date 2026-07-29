@@ -21,18 +21,37 @@ Original multiplier in configuration.yaml templates was `6.5455` — slight disc
 
 Raw entity: `sensor.well_monitor_analog_input_2_voltage_measurement`
 
-The integration now reads the **raw** voltage entity directly and applies an internal
-time-weighted EMA filter (`tau = 300s` default). The old lowpass+SMA filter sensor
-has been removed from configuration.
+The integration reads the **raw** voltage entity directly and applies an internal
+**PWM duty-cycle decoder** (`filter.py`). The old time-weighted EMA filter (and its
+`ema_tau_seconds` config option) has been replaced as of v1.1.0.
 
-### Filter approach
+### Filter approach — duty-cycle decoding
+
+The sensor voltage is quantized in ~0.02–0.03 V steps. Between steps the reading
+toggles between the two adjacent quantization levels; the fraction of time spent at
+the upper level encodes the true sub-step level — a PWM duty cycle. The decoder
+tracks the active pair `(lo, hi)` and a time-weighted duty estimate:
 
 ```
-ema = alpha_t × raw + (1 − alpha_t) × ema
-alpha_t = 1 − exp(−dt / tau)
+output = lo + duty × (hi − lo)
 ```
 
-Long gap → alpha_t → 1.0 (trust new reading fully), short gap → alpha_t → 0 (suppress noise).
+- Toggle within pair → duty updates (ZOH EMA, tau 900 s) → smooth interpolation
+- Step up one level → pair re-anchors, output continuous (fill tracking)
+- Jump > 1 step → snap to raw immediately (fast draw-down tracking)
+- **Fill ratchet**: while filling, duty may only rise — output strictly monotone
+- **Adaptive smoothing**: output EMA (tau 360 s) grows to 5× while the pair is
+  static (flat line through dithering), drops to 90 s when output runs > 0.025 V
+  away (draw-down stays responsive)
+
+A 60 s internal tick advances the filter with the held reading between source
+events (the source entity emits nothing while its value is unchanged). Filter
+state persists across restarts via the history file (wall-clock time base).
+
+Algorithm developed and tuned against recorded data — see
+`analysis/sim_duty_decode.py`. Versus the old EMA on the July 2026 sample:
+fill roughness 1.62 → 1.00 (perfectly monotone), draw-down lag 0.123 → 0.056 V,
+static-level flatness 0.376 → 0.019 V total variation.
 
 ## Sensors
 

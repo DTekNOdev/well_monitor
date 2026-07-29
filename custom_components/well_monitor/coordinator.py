@@ -20,15 +20,15 @@ from .const import (
     CONF_CAL_VOLTAGE_HIGH,
     CONF_CAL_DEPTH_HIGH,
     CONF_WELL_DIAMETER_MM,
-    CONF_EMA_TAU,
-    DEFAULT_EMA_TAU,
     RATE_WINDOW_SECONDS,
     RECHARGE_WINDOW_SECONDS,
     CONF_LONG_RATE_WINDOW,
     CONF_WATER_TABLE_WINDOW,
     DEFAULT_LONG_RATE_WINDOW,
     DEFAULT_WATER_TABLE_WINDOW,
+    FILTER_TICK_SECONDS,
 )
+from .filter import DutyDecoder, OutputSmoother
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,13 +61,11 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._litres_per_metre: float = math.pi * radius_m ** 2 * 1000.0
         self._max_depth_m: float = d_high
 
-        # ── Time-weighted EMA smoothing ───────────────────────────────────────
-        # alpha_t = 1 - exp(-dt / tau)
-        # Long gap → alpha_t → 1.0 (trust the new reading fully).
-        # Short gap → alpha_t → 0   (suppress noise).
-        self._ema_tau: float = float(cfg.get(CONF_EMA_TAU, DEFAULT_EMA_TAU))
-        self._ema_voltage: float | None = None
-        self._last_voltage_time: float | None = None  # monotonic seconds
+        # ── Duty-cycle decoding of the quantized voltage (see filter.py) ──────
+        # Uses wall-clock time so filter state survives restarts via the
+        # persisted history file.
+        self._decoder = DutyDecoder()
+        self._smoother = OutputSmoother()
 
         # ── Long-term windows ────────────────────────────────────────────────
         self._long_rate_window: float = float(cfg.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW))
@@ -127,8 +125,25 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
                 timedelta(seconds=RATE_WINDOW_SECONDS),
             )
         )
+        # Periodic filter tick: the source entity emits nothing while its value
+        # is unchanged, but the duty decoder integrates dwell-time evidence —
+        # advance it with the held reading so long dwells register.
+        entry.async_on_unload(
+            async_track_time_interval(
+                self.hass,
+                self._filter_tick,
+                timedelta(seconds=FILTER_TICK_SECONDS),
+            )
+        )
 
     async def _handle_source_update(self, event: Event) -> None:
+        await self.async_request_refresh()
+
+    async def _filter_tick(self, _now=None) -> None:
+        """Advance the filter with the held value when no events arrive."""
+        state = self.hass.states.get(self._voltage_entity)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return  # don't spam UpdateFailed while the source is away
         await self.async_request_refresh()
 
     async def _check_stale_rate(self, _now=None) -> None:
@@ -165,18 +180,13 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
                 f"Cannot parse voltage value '{state.state}'"
             ) from exc
 
-        # Time-weighted EMA: seed on first reading; weight by elapsed time after that.
-        now_mono = time.monotonic()
-        if self._ema_voltage is None or self._last_voltage_time is None:
-            self._ema_voltage = raw_voltage
-        else:
-            dt = now_mono - self._last_voltage_time
-            alpha_t = 1.0 - math.exp(-dt / self._ema_tau)
-            self._ema_voltage = alpha_t * raw_voltage + (1.0 - alpha_t) * self._ema_voltage
-        self._last_voltage_time = now_mono
-        self._last_data_time = now_mono
-
-        voltage = self._ema_voltage
+        # Duty-cycle decode + adaptive smoothing (wall-clock time base so the
+        # filter state persisted in the history file stays valid on restart).
+        now_wall = time.time()
+        decoded = self._decoder.update(now_wall, raw_voltage)
+        quiet = now_wall - self._decoder.last_anchor_t
+        voltage = self._smoother.update(now_wall, decoded, quiet=quiet)
+        self._last_data_time = time.monotonic()
 
         # Clamp depth to zero — sensor noise can produce slightly negative values.
         depth = max(0.0, (voltage - self._voltage_zero) * self._depth_scale)
@@ -207,7 +217,7 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         await self._save_history()
 
         _LOGGER.debug(
-            "Well: raw=%.3fV ema=%.3fV → %.3fm, %.1fL (%.1f%%), "
+            "Well: raw=%.3fV filt=%.3fV → %.3fm, %.1fL (%.1f%%), "
             "rate=%.1f L/h long=%.1f L/h recharge=%.1f L/h table=%.1fL",
             raw_voltage, voltage, self.depth_m,
             self.volume_litres, self.level_pct or 0,
@@ -321,6 +331,12 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             [(t, v, d) for t, v, d in data.get("volume_history", []) if now - t < self._water_table_window],
             maxlen=self._volume_history.maxlen,
         )
+        # Restore filter state so a restart doesn't snap the level back to the
+        # quantized raw value (wall-clock time base makes this valid).
+        if "decoder_state" in data:
+            self._decoder.restore(data["decoder_state"])
+        if "smoother_state" in data:
+            self._smoother.restore(data["smoother_state"])
         self._history_loaded = True
         _LOGGER.debug(
             "Well: loaded %d history, %d recharge, %d volume samples",
@@ -337,6 +353,8 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             "history": list(self._history),
             "recharge_history": list(self._recharge_history),
             "volume_history": list(self._volume_history),
+            "decoder_state": self._decoder.to_dict(),
+            "smoother_state": self._smoother.to_dict(),
         }
 
         def _write():

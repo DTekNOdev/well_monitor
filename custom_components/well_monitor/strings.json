@@ -28,15 +28,13 @@
         }
       },
       "geometry": {
-        "title": "Well Monitor — Well Geometry & Filtering",
+        "title": "Well Monitor — Well Geometry",
         "description": "The well is assumed to be a cylinder. Volume is calculated from water depth × cross-sectional area.\n\nMeasure the internal diameter of the borehole casing, not the drill diameter.",
         "data": {
-          "well_diameter_mm": "Borehole internal diameter (mm)",
-          "ema_tau_seconds": "Smoothing time constant (seconds)"
+          "well_diameter_mm": "Borehole internal diameter (mm)"
         },
         "data_description": {
-          "well_diameter_mm": "Internal diameter of the borehole casing in millimetres. Common sizes: 75 mm (3\"), 100 mm (4\"), 125 mm (5\"), 150 mm (6\").",
-          "ema_tau_seconds": "Time constant (τ) for voltage smoothing in seconds (10–3600). Larger = smoother but slower to respond. After a gap longer than τ the new reading is trusted fully. 120s is a good starting point."
+          "well_diameter_mm": "Internal diameter of the borehole casing in millimetres. Common sizes: 75 mm (3\"), 100 mm (4\"), 125 mm (5\"), 150 mm (6\")."
         }
       }
     },
@@ -56,8 +54,7 @@
           "cal_depth_low":    "Water depth at low reference (m)",
           "cal_voltage_high": "High reference voltage (V)",
           "cal_depth_high":   "Water depth at high reference (m)",
-          "well_diameter_mm": "Borehole internal diameter (mm)",
-          "ema_tau_seconds":        "Smoothing time constant (seconds)"
+          "well_diameter_mm": "Borehole internal diameter (mm)"
         }
       }
     }

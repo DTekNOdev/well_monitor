@@ -8,15 +8,20 @@ CONF_CAL_DEPTH_LOW     = "cal_depth_low"
 CONF_CAL_VOLTAGE_HIGH  = "cal_voltage_high"
 CONF_CAL_DEPTH_HIGH    = "cal_depth_high"
 CONF_WELL_DIAMETER_MM  = "well_diameter_mm"
-CONF_EMA_TAU           = "ema_tau_seconds"
 CONF_LONG_RATE_WINDOW  = "long_rate_window_seconds"
 CONF_WATER_TABLE_WINDOW = "water_table_window_seconds"
+# Legacy key — no longer used (duty-cycle decoder replaced the EMA filter);
+# may still be present in stored config entries.
+CONF_EMA_TAU           = "ema_tau_seconds"
 
 # Defaults
 DEFAULT_CAL_VOLTAGE_LOW  = 0.0
 DEFAULT_CAL_DEPTH_LOW    = 0.0
 DEFAULT_WELL_DIAMETER_MM = 110.0   # mm  (a common 4-inch borehole liner is ~110 mm ID)
-DEFAULT_EMA_TAU          = 300.0   # seconds — time constant for voltage smoothing
+
+# Duty-cycle filter tick: how often the filter advances with the held reading
+# while the source entity is silent (see filter.py)
+FILTER_TICK_SECONDS = 60
 
 # Device metadata
 DEVICE_MANUFACTURER = "DTekNO"
