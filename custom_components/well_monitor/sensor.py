@@ -80,6 +80,13 @@ class WellVoltageSensor(_WellBase):
     def native_value(self):
         return self.coordinator.voltage
 
+    @property
+    def extra_state_attributes(self):
+        return {
+            "filter_method": getattr(self.coordinator, "filter_method", None),
+            "model_rung": getattr(self.coordinator, "filter_rung", None),
+        }
+
 
 class WellDepthSensor(_WellBase):
     """Height of the water column in the borehole (metres)."""

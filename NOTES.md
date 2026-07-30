@@ -53,6 +53,28 @@ Algorithm developed and tuned against recorded data — see
 fill roughness 1.62 → 1.00 (perfectly monotone), draw-down lag 0.123 → 0.056 V,
 static-level flatness 0.376 → 0.019 V total variation.
 
+### Experimental alternative — recharge-model estimator (`ladder.py`)
+
+A **Level estimator** option (integration configure dialog) selects which
+filter feeds depth/volume/rates:
+
+- **Duty-cycle decoder** (default) — the filter above.
+- **Recharge model** (experimental) — models the fill physics directly:
+  double-exponential recharge (fast tau 5.2 h borehole storage + slow tau
+  27.2 h aquifer, fitted from the July 2026 capture), anchored on quiet-zone
+  centres, with an evidence ladder that degrades gracefully to level-hold /
+  raw tracking when a fill has too few anchors or a drawdown is under way.
+  Corrections never step: they are continuity-absorbed and rate-capped at
+  max(2× model slope, one quantization step per 4 h).
+  Design: `docs/model_estimator_design.md`; validation: `analysis/sim_ladder.py`
+  (9.2 mV rms vs 13.2 mV for the duty decoder against hindsight anchors).
+
+Both estimators run in parallel regardless of selection, so switching in the
+options is warm. The voltage sensor exposes `filter_method` and `model_rung`
+attributes for monitoring. Multiple config entries on the same input voltage
+are supported (per-entry persistence files), so a second device can run the
+other method side by side for comparison.
+
 ## Sensors
 
 The integration publishes 8 sensors under a single device:

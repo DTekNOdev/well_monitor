@@ -54,8 +54,20 @@
           "cal_depth_low":    "Water depth at low reference (m)",
           "cal_voltage_high": "High reference voltage (V)",
           "cal_depth_high":   "Water depth at high reference (m)",
-          "well_diameter_mm": "Borehole internal diameter (mm)"
+          "well_diameter_mm": "Borehole internal diameter (mm)",
+          "filter_method":    "Level estimator"
+        },
+        "data_description": {
+          "filter_method": "Which filter turns the quantized sensor voltage into the level that feeds depth, volume and rates. 'Duty-cycle decoder' is the established default; 'Recharge model' is the experimental physical-model estimator."
         }
+      }
+    }
+  },
+  "selector": {
+    "filter_method": {
+      "options": {
+        "duty": "Duty-cycle decoder (default)",
+        "model": "Recharge model (experimental)"
       }
     }
   }

@@ -20,8 +20,16 @@ DEFAULT_CAL_DEPTH_LOW    = 0.0
 DEFAULT_WELL_DIAMETER_MM = 110.0   # mm  (a common 4-inch borehole liner is ~110 mm ID)
 
 # Duty-cycle filter tick: how often the filter advances with the held reading
-# while the source entity is silent (see filter.py)
+# while the source entity is silent (see filter.py / ladder.py)
 FILTER_TICK_SECONDS = 60
+
+# Which level estimator feeds depth/volume/rates.
+#   duty  — quantization duty-cycle decoder (filter.py), the established default
+#   model — physical recharge-model evidence ladder (ladder.py), experimental
+CONF_FILTER_METHOD = "filter_method"
+FILTER_METHOD_DUTY = "duty"
+FILTER_METHOD_MODEL = "model"
+DEFAULT_FILTER_METHOD = FILTER_METHOD_DUTY
 
 # Device metadata
 DEVICE_MANUFACTURER = "DTekNO"

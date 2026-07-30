@@ -5,7 +5,13 @@ import math
 import voluptuous as vol
 
 from homeassistant import config_entries
-from homeassistant.helpers.selector import EntitySelector, EntitySelectorConfig
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .const import (
     DOMAIN,
@@ -17,11 +23,15 @@ from .const import (
     CONF_WELL_DIAMETER_MM,
     CONF_LONG_RATE_WINDOW,
     CONF_WATER_TABLE_WINDOW,
+    CONF_FILTER_METHOD,
     DEFAULT_CAL_VOLTAGE_LOW,
     DEFAULT_CAL_DEPTH_LOW,
     DEFAULT_WELL_DIAMETER_MM,
     DEFAULT_LONG_RATE_WINDOW,
     DEFAULT_WATER_TABLE_WINDOW,
+    DEFAULT_FILTER_METHOD,
+    FILTER_METHOD_DUTY,
+    FILTER_METHOD_MODEL,
 )
 
 
@@ -159,6 +169,13 @@ class WellMonitorOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_CAL_VOLTAGE_HIGH,   default=defaults.get(CONF_CAL_VOLTAGE_HIGH, 1.0)):                        vol.Coerce(float),
             vol.Required(CONF_CAL_DEPTH_HIGH,     default=defaults.get(CONF_CAL_DEPTH_HIGH,   5.0)):                        vol.Coerce(float),
             vol.Required(CONF_WELL_DIAMETER_MM,   default=defaults.get(CONF_WELL_DIAMETER_MM, DEFAULT_WELL_DIAMETER_MM)):   vol.Coerce(float),
+            vol.Required(CONF_FILTER_METHOD,      default=defaults.get(CONF_FILTER_METHOD,    DEFAULT_FILTER_METHOD)):      SelectSelector(
+                SelectSelectorConfig(
+                    options=[FILTER_METHOD_DUTY, FILTER_METHOD_MODEL],
+                    mode=SelectSelectorMode.DROPDOWN,
+                    translation_key="filter_method",
+                )
+            ),
             vol.Optional(CONF_LONG_RATE_WINDOW,   default=defaults.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW)):   vol.All(vol.Coerce(float), vol.Range(min=3600, max=604800)),
             vol.Optional(CONF_WATER_TABLE_WINDOW, default=defaults.get(CONF_WATER_TABLE_WINDOW, DEFAULT_WATER_TABLE_WINDOW)): vol.All(vol.Coerce(float), vol.Range(min=86400, max=2592000)),
         })

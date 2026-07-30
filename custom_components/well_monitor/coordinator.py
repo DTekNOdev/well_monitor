@@ -27,8 +27,12 @@ from .const import (
     DEFAULT_LONG_RATE_WINDOW,
     DEFAULT_WATER_TABLE_WINDOW,
     FILTER_TICK_SECONDS,
+    CONF_FILTER_METHOD,
+    DEFAULT_FILTER_METHOD,
+    FILTER_METHOD_MODEL,
 )
 from .filter import DutyDecoder, OutputSmoother
+from .ladder import LadderEstimator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,11 +65,14 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self._litres_per_metre: float = math.pi * radius_m ** 2 * 1000.0
         self._max_depth_m: float = d_high
 
-        # ── Duty-cycle decoding of the quantized voltage (see filter.py) ──────
+        # ── Level estimator (see filter.py / ladder.py) ───────────────────────
         # Uses wall-clock time so filter state survives restarts via the
-        # persisted history file.
+        # persisted history file.  The method is selectable per entry, so two
+        # entries on the same input voltage can run one method each.
+        self._filter_method: str = cfg.get(CONF_FILTER_METHOD, DEFAULT_FILTER_METHOD)
         self._decoder = DutyDecoder()
         self._smoother = OutputSmoother()
+        self._ladder = LadderEstimator()
 
         # ── Long-term windows ────────────────────────────────────────────────
         self._long_rate_window: float = float(cfg.get(CONF_LONG_RATE_WINDOW, DEFAULT_LONG_RATE_WINDOW))
@@ -83,7 +90,13 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         self.recharge_rate_lph: float | None = None  # max recharge rate in window
 
         # ── Persistence ───────────────────────────────────────────────────────
-        self._history_file = Path(hass.config.path(f"{DOMAIN}_history.json"))
+        # Per-entry persistence so multiple entries (e.g. one per filter
+        # method on the same input) don't overwrite each other's state.
+        self._history_file = Path(
+            hass.config.path(f"{DOMAIN}_history_{entry.entry_id}.json")
+        )
+        # First entry upgrade path: adopt the legacy shared file if present.
+        self._legacy_history_file = Path(hass.config.path(f"{DOMAIN}_history.json"))
         self._last_persist_time: float = 0.0
         self._history_loaded: bool = False
 
@@ -180,12 +193,19 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
                 f"Cannot parse voltage value '{state.state}'"
             ) from exc
 
-        # Duty-cycle decode + adaptive smoothing (wall-clock time base so the
-        # filter state persisted in the history file stays valid on restart).
+        # Level estimation (wall-clock time base so the filter state persisted
+        # in the history file stays valid on restart).  Both estimators are
+        # advanced every update so switching method in the options never
+        # starts from cold — only the published value changes.
         now_wall = time.time()
         decoded = self._decoder.update(now_wall, raw_voltage)
         quiet = now_wall - self._decoder.last_anchor_t
-        voltage = self._smoother.update(now_wall, decoded, quiet=quiet)
+        duty_voltage = self._smoother.update(now_wall, decoded, quiet=quiet)
+        model_voltage = self._ladder.update(now_wall, raw_voltage)
+        voltage = (
+            model_voltage if self._filter_method == FILTER_METHOD_MODEL
+            else duty_voltage
+        )
         self._last_data_time = time.monotonic()
 
         # Clamp depth to zero — sensor noise can produce slightly negative values.
@@ -193,6 +213,8 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
         volume = depth * self._litres_per_metre
         level_pct = min(100.0, depth / self._max_depth_m * 100.0) if self._max_depth_m > 0 else None
 
+        self.filter_method = self._filter_method
+        self.filter_rung   = self._ladder.rung
         self.voltage       = round(voltage, 3)
         self.depth_m       = round(depth, 3)
         self.volume_litres = round(volume, 1)
@@ -302,9 +324,12 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
     async def _load_history(self) -> None:
         """Load history deques from disk."""
         def _read():
-            if not self._history_file.exists():
-                return None
-            return json.loads(self._history_file.read_text())
+            if self._history_file.exists():
+                return json.loads(self._history_file.read_text())
+            if self._legacy_history_file.exists():
+                # pre-multi-entry installs used one shared file — adopt it
+                return json.loads(self._legacy_history_file.read_text())
+            return None
 
         try:
             data = await self.hass.async_add_executor_job(_read)
@@ -337,6 +362,8 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             self._decoder.restore(data["decoder_state"])
         if "smoother_state" in data:
             self._smoother.restore(data["smoother_state"])
+        if "ladder_state" in data:
+            self._ladder.restore(data["ladder_state"])
         self._history_loaded = True
         _LOGGER.debug(
             "Well: loaded %d history, %d recharge, %d volume samples",
@@ -355,6 +382,7 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
             "volume_history": list(self._volume_history),
             "decoder_state": self._decoder.to_dict(),
             "smoother_state": self._smoother.to_dict(),
+            "ladder_state": self._ladder.to_dict(),
         }
 
         def _write():
