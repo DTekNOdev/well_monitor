@@ -322,13 +322,24 @@ class WellMonitorCoordinator(DataUpdateCoordinator):
     # ── Persistence ────────────────────────────────────────
 
     async def _load_history(self) -> None:
-        """Load history deques from disk."""
+        """Load history deques from disk.
+
+        The legacy shared file (pre-multi-entry installs) is adopted at most
+        once: the first entry to find it takes the data over and the file is
+        retired immediately.  Without that, every newly added entry — e.g. a
+        second device for the experimental estimator — would silently inherit
+        the first device's learned rates and recharge history.
+        """
         def _read():
             if self._history_file.exists():
                 return json.loads(self._history_file.read_text())
             if self._legacy_history_file.exists():
-                # pre-multi-entry installs used one shared file — adopt it
-                return json.loads(self._legacy_history_file.read_text())
+                data = json.loads(self._legacy_history_file.read_text())
+                # claim it: retire the legacy file so no later entry adopts it
+                self._legacy_history_file.rename(
+                    self._legacy_history_file.with_suffix(".json.migrated")
+                )
+                return data
             return None
 
         try:
