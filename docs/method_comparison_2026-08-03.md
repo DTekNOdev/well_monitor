@@ -163,11 +163,65 @@ clean one.
 3. **The physics generalises.** July's taus fit this unseen cycle nearly as
    well as freshly-fitted ones, and the clean fill's 5.9 mV residual matches
    July's 5.7 mV.
-4. **Fill lag of ~11 min is the remaining cost**, and it is inherent to
-   waiting for crossing evidence. Worth revisiting only if it proves
-   practically limiting.
+4. **Fill lag is smaller than it looks and is not worth chasing.** Of the 11 min
+   headline, only ~3 min is the estimator's; the rest is raw's own dither
+   settling, measured in §6. Relaxing the constraints that produce it recovers
+   about 30 seconds. No change warranted.
 
-## 6. Analysis bugs found while producing this report
+## 6. How much of the fill lag is real, and can prediction remove it?
+
+`analysis/exp_predict_ahead.py` replays the recorded raw signal through the
+production estimator and through variants with each suppressor relaxed. It was
+written to test the hypothesis that the ~11 min fill lag is the *cost of waiting
+for crossing evidence* and could be recovered by extrapolating the fitted curve
+further forward. **The hypothesis was wrong on both counts.**
+
+First, the ladder already extrapolates. At rung 3–4 the published target is
+`self._curve(t)` evaluated at the current time on every 60 s tick
+([ladder.py:305](../custom_components/well_monitor/ladder.py#L305)) — forward
+modelling is what it does between crossings, not something it waits to begin.
+
+Second, the mechanisms that hold that prediction back cost far less than
+expected:
+
+| variant | fill med | fill p90 | drain med | model rms |
+|---|---|---|---|---|
+| live (production) | 7.0 | 23.6 | 0.0 | 7.7 mV |
+| rate cap removed | 7.0 | 23.6 | 0.0 | 7.7 mV |
+| band ceiling +1 level | 6.0 | 23.3 | 0.0 | **6.6 mV** |
+| both | 6.0 | 23.3 | 0.0 | 6.6 mV |
+
+- **The rate cap never binds.** Identical to four figures with it removed — the
+  band ceiling already constrains the target more tightly, so the cap has
+  nothing to clip. It costs nothing and can stay.
+- **The band ceiling is the only suppressor that bites**, and it is worth about
+  **1 minute** of median lag. (It does cost ~1 mV of model accuracy, which is
+  the one measurable argument for relaxing it.)
+
+Third — and this is the substantive finding — **most of the remaining "lag" is
+not the estimator's.** The metric compares against raw's *first touch* of a
+level, which is usually a transient blip:
+
+| | median | p90 | max |
+|---|---|---|---|
+| raw's own settle time after first touch | 1.0 | 50.7 | 146.0 |
+| **lag vs raw's *settled* crossing (live)** | **+3.0** | **+13.2** | — |
+| lag vs raw's settled crossing (predict-ahead) | +2.5 | +12.2 | — |
+
+Against a fair reference the estimator's true fill lag is **3 min median /
+13 min p90**, not 11 / 27. The rest is raw dithering, and closing it would mean
+chasing blips — the exact behaviour the ladder exists to prevent. Predicting
+further ahead recovers about **30 seconds** of that 3 minutes.
+
+**Conclusion: no change is warranted.** The available win is under a minute of
+median lag, against a signal moving at 60–95 mV/h (~1 mV of level error), and it
+would be bought by loosening the constraint that currently makes over-prediction
+impossible. Note that the replay's 7.0 min baseline differs from §2's 11.0 min
+because the replay starts cold with no prior episode state and runs ~7 mV ahead
+of the recorded series; use the replay only to compare variants against each
+other, not against §2.
+
+## 7. Analysis bugs found while producing this report
 
 Both were in `analysis/report_two_methods.py`, written for this report — not in
 the integration. Recorded because they would otherwise recur next week.
@@ -190,8 +244,12 @@ Re-run `python analysis/report_two_methods.py` against the new export and
 compare against this file. The figures to watch:
 
 - **drain pooled median / p90 lag** — should stay at 0.0 / 0.0 for the new method
-- **fill pooled median / p90 lag** — currently 11.0 / 27.0 min; the numbers to
-  try to reduce. Do *not* compare maxima (§2).
+- **fill pooled median / p90 lag** — currently 11.0 / 27.0 min. Do *not* compare
+  maxima (§2), and read §6 before treating this as a defect: only ~3 min of it
+  is the estimator's, the rest is raw's dither settling.
+- **`python analysis/exp_predict_ahead.py`** — re-run alongside the main report.
+  Its "lag vs raw's settled crossing" figures (3.0 / 13.2 min) are the honest
+  lag metric and the better week-on-week comparison.
 - **best-fill model rms** — 5.9 mV here; a rise suggests the taus are drifting
   seasonally and want refitting
 - **best-fill smoothness** — 1.00 here; anything above ~1.1 means quantization
