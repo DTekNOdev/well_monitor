@@ -327,6 +327,33 @@ def main() -> None:
               f"   n={arr.size}")
     print("negative = the estimator reaches the level BEFORE raw settles there")
 
+    # ── re-score the variants on distance-from-physics ──────────────────────
+    # The lag figures above use per-level crossing times, which are corrupted by
+    # raw's transient blips.  scorecard.py measures distance from the fitted
+    # physics curve and reports the effective delay as the shift that best lines
+    # the series up — a metric the blips cannot reach.  Re-run the variants
+    # against it, because it is the metric that decides whether the band ceiling
+    # is worth relaxing.
+    from scorecard import GRID_MIN, build_physics, dist_delay
+
+    print()
+    print("=" * 74)
+    print("VARIANTS RE-SCORED vs the physics curve (mV / min)")
+    print("=" * 74)
+    grid = pd.date_range(raw_s.index[0], raw_s.index[-1], freq=f"{GRID_MIN}min")
+    hind = pd.Series(np.nan, index=grid)          # not needed for the fill half
+    physics, _ = build_physics(raw, events, grid, hind.fillna(0.0))
+    m_fill = physics.notna().to_numpy()
+    print(f"{'variant':<11}{'dist':>8}{'delay':>8}{'resid':>8}{'bias':>8}")
+    for name, kw in VARIANTS.items():
+        s = replay(raw, **kw)
+        g = s.reindex(s.index.union(grid)).ffill().reindex(grid)
+        r = dist_delay(g, physics, m_fill)
+        print(f"{name:<11}{r['dist']:>8.1f}{r['delay']:>8.0f}"
+              f"{r['resid']:>8.1f}{r['bias']:>+8.1f}")
+    print("dist = RMS from the physics curve; delay = best-alignment shift;")
+    print("resid = RMS once the delay is removed (the non-lag error)")
+
     # sanity: does the 'live' replay reproduce the recorded live series?
     lv = live_series[(live_series.index >= clean["t0"])
                      & (live_series.index <= clean["t1"])]

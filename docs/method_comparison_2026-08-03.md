@@ -8,27 +8,65 @@ estimator, `ladder.py`), **old** (duty decoder + adaptive EMA, `filter.py`).
 This is the first out-of-sample test — the ladder's reference taus were fitted
 on the July capture, and it had never seen this cycle.
 
-## Verdict
+## Scorecard — the skim layer
 
-| | new (ladder) | old (EMA) |
-|---|---|---|
-| Drawdown lag, median | **0.0 min** | 1.4 min |
-| Drawdown lag, p90 | **0.0 min** | 9.3 min |
-| Fill lag, median | **11.0 min** | 16.0 min |
-| Fill lag, p90 | **27.0 min** | 31.0 min |
-| Agreement with model (best fill, rms) | **13.3 mV** | 20.9 mV |
-| Smoothness (best fill) | **1.00** | 1.05 |
+`python analysis/scorecard.py`. Distance from the hindsight reference, split by
+regime. Each estimate is scored against the best available reconstruction:
+**fills → the double-exponential physics curve** fitted to quiet-zone anchors
+(independent of raw's noise); **drawdown → a centred zero-lag fit of raw** (no
+physics curve exists for a drawdown — demand is unknown). All figures mV and
+minutes, lower is better.
 
-(Maxima are deliberately omitted — see the warning in §2. They measure
-transient-blip chasing, not lag.)
+| | FILL dist | delay | resid | | DRAW dist | delay | resid | | **SCORE** |
+|---|---|---|---|---|---|---|---|---|---|
+| raw *(floor)* | 9.5 | 3 | 8.7 | | 11.7 | 0 | 11.7 | | *10.9* |
+| **new** (ladder) | **13.4** | 10 | **3.4** | | **16.3** | **0** | 16.3 | | **15.3** |
+| old (EMA) | 21.1 | 16 | 5.2 | | 15.7 | 2 | 13.2 | | 17.5 |
+
+- **dist** — RMS distance from the reference value.
+- **delay** — the time shift that best lines the estimate up: the effective lag
+  in picking up change. Aggregate, and immune to the blip-chasing that corrupts
+  per-level crossing times (§2).
+- **resid** — RMS once that delay is removed: the error that is *not* lag.
+- **SCORE** — duration-weighted mean dist. The single number to minimise.
+
+**Reading it in one line: `new` is 13% closer to the truth than `old` overall,
+and its fill error is almost entirely delay rather than mis-shape.** Remove the
+10-minute delay and the fill distance drops 13.4 → 3.4 mV — better shape than
+raw itself (8.7 mV). The ladder is reconstructing the recharge curve accurately;
+it is just doing so slightly late. On drawdown it has **zero** delay where the
+old method has 2 minutes.
+
+Read **raw as the floor, not a competitor**: it has zero delay by definition, so
+its dist is pure quantization noise — the budget the smoothers work against.
+What smoothing buys (a monotone, readable trace) is not scored here; that is
+§5, where `new` is perfectly monotone at 1.00 against raw's 4.17.
+
+The ranking is stable across hindsight-window choices from 11 to 61 min, and the
+physics reference validates: on the clean fill it agrees with the centred
+reconstruction to 6.6 mV, exactly the model's own anchor residual. The 01 Aug
+fill is excluded — truncated by a second drawdown, its fit residual is 25.9 mV,
+so there the *reference* is the unreliable party.
 
 **No defect was found in the deployed estimator.** The integration code has not
 been changed since 30 July (`c4e1b26`), so these figures describe exactly what
 ran over the weekend. Two bugs *were* found and fixed in the analysis script
-during this work — see §6.
+during this work — see §7.
 
-The new method is **effectively lag-free on drawdown** while being at least as
-smooth as the old one. That was the design goal and it holds on unseen data.
+<details>
+<summary>Older headline table (lag by level crossing) — superseded, kept for continuity</summary>
+
+| | new (ladder) | old (EMA) |
+|---|---|---|
+| Drawdown lag, median / p90 | **0.0 / 0.0 min** | 1.4 / 9.3 min |
+| Fill lag, median / p90 | **11.0 / 27.0 min** | 16.0 / 31.0 min |
+| Agreement with model (best fill, rms) | **13.3 mV** | 20.9 mV |
+| Smoothness (best fill) | **1.00** | 1.05 |
+
+Maxima are deliberately omitted — see the warning in §2. Prefer the scorecard
+above: crossing-time lag is inflated by raw's transient blips, and only ~3 min
+of the 11 is the estimator's (§6).
+</details>
 
 ## 1. Events detected
 
@@ -163,10 +201,12 @@ clean one.
 3. **The physics generalises.** July's taus fit this unseen cycle nearly as
    well as freshly-fitted ones, and the clean fill's 5.9 mV residual matches
    July's 5.7 mV.
-4. **Fill lag is smaller than it looks and is not worth chasing.** Of the 11 min
-   headline, only ~3 min is the estimator's; the rest is raw's own dither
-   settling, measured in §6. Relaxing the constraints that produce it recovers
-   about 30 seconds. No change warranted.
+4. **The fill error is delay, not mis-shape** — and the delay is smaller than
+   the crossing metric suggests. Take the 10 min delay out and fill distance
+   falls 13.4 → 3.4 mV, beating raw. Of the 11 min crossing-time figure only
+   ~3 min is the estimator's; the rest is raw's dither settling (§6). Relaxing
+   the constraints that cause it recovers ~1 min and ~1.2 mV. **No change
+   warranted**, but this is where the remaining headroom is if it ever matters.
 
 ## 6. How much of the fill lag is real, and can prediction remove it?
 
@@ -198,9 +238,24 @@ expected:
   **1 minute** of median lag. (It does cost ~1 mV of model accuracy, which is
   the one measurable argument for relaxing it.)
 
-Third — and this is the substantive finding — **most of the remaining "lag" is
-not the estimator's.** The metric compares against raw's *first touch* of a
-level, which is usually a transient blip:
+Re-scored against the physics curve (the metric the scorecard uses, and the one
+that matters — crossing times are corrupted by blips), the same variants:
+
+| variant | fill dist | delay | resid |
+|---|---|---|---|
+| live | 8.6 mV | 6 min | 3.2 mV |
+| rate cap removed | 8.5 | 6 | 3.1 |
+| band ceiling +1 level | 7.5 | 5 | 3.3 |
+| both | **7.4** | **5** | 3.2 |
+
+So relaxing the ceiling is worth ~1.2 mV and ~1 minute. Real but small, and it
+buys nothing on shape. (These replay figures run ~7 mV ahead of the recorded live
+series — see the caveat at the end of this section — so compare variants against
+each other, not against the scorecard.)
+
+Third, **most of the *crossing-time* lag is not the estimator's at all.** That
+metric compares against raw's *first touch* of a level, which is usually a
+transient blip:
 
 | | median | p90 | max |
 |---|---|---|---|
@@ -240,8 +295,13 @@ the integration. Recorded because they would otherwise recur next week.
 
 ## For next week's comparison
 
-Re-run `python analysis/report_two_methods.py` against the new export and
-compare against this file. The figures to watch:
+**Start with `python analysis/scorecard.py`** — that is the skim layer, and its
+SCORE column is the one number to compare week on week (and the objective to
+optimise against if the estimator is ever tuned). Current baseline: **new 15.3,
+old 17.5, raw floor 10.9**; fill delay 10 min, drawdown delay 0 min.
+
+Then re-run `python analysis/report_two_methods.py` for the detail. The figures
+to watch:
 
 - **drain pooled median / p90 lag** — should stay at 0.0 / 0.0 for the new method
 - **fill pooled median / p90 lag** — currently 11.0 / 27.0 min. Do *not* compare
