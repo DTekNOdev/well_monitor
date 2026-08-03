@@ -1,57 +1,66 @@
 # Well Monitor — smoothing method comparison
 
 **Capture** 30 Jul 22:00 → 03 Aug 09:26 UTC (83.4 h) · **raw span** 6.05–8.13 V (2.08 V)
-**Regenerate:** `python analysis/report_two_methods.py` (reads `history-long-2methods.csv`)
+**Regenerate:** `analysis/scorecard.py` for the summary, `analysis/report_two_methods.py`
+for the detail (both read `history-long-2methods.csv`)
 
 Three series, all live: **raw** (quantized sensor), **new** (evidence-ladder
 estimator, `ladder.py`), **old** (duty decoder + adaptive EMA, `filter.py`).
 This is the first out-of-sample test — the ladder's reference taus were fitted
 on the July capture, and it had never seen this cycle.
 
-## Scorecard — the skim layer
+## Summary
 
-`python analysis/scorecard.py`. Distance from the hindsight reference, split by
-regime. Each estimate is scored against the best available reconstruction:
-**fills → the double-exponential physics curve** fitted to quiet-zone anchors
-(independent of raw's noise); **drawdown → a centred zero-lag fit of raw** (no
-physics curve exists for a drawdown — demand is unknown). All figures mV and
-minutes, lower is better.
+Distance from the hindsight truth, mV and minutes, **lower is better**
+(`python analysis/scorecard.py`):
 
-| | FILL dist | delay | resid | | DRAW dist | delay | resid | | **SCORE** |
-|---|---|---|---|---|---|---|---|---|---|
-| raw *(floor)* | 9.5 | 3 | 8.7 | | 11.7 | 0 | 11.7 | | *10.9* |
-| **new** (ladder) | **13.4** | 10 | **3.4** | | **16.3** | **0** | 16.3 | | **15.3** |
-| old (EMA) | 21.1 | 16 | 5.2 | | 15.7 | 2 | 13.2 | | 17.5 |
+| method | fill dist | fill delay | fill resid | draw dist | draw delay | draw resid | **SCORE** |
+|---|---|---|---|---|---|---|---|
+| raw *(noise floor)* | 9.5 | 3 | 8.7 | 11.7 | 0 | 11.7 | *10.9* |
+| **new** (ladder) | **13.4** | 10 | **3.4** | **16.3** | **0** | 16.3 | **15.3** |
+| old (EMA) | 21.1 | 16 | 5.2 | 15.7 | 2 | 13.2 | 17.5 |
 
-- **dist** — RMS distance from the reference value.
+**`new` is 13% closer to the truth than `old`, and its fill error is almost all
+delay, not mis-shape** — take the 10 min out and fill distance falls 13.4 →
+3.4 mV, a better shape than raw itself. On drawdown it has zero delay against
+old's 2 min. **No defect found**; the integration is unchanged since 30 July
+(`c4e1b26`). The two bugs fixed during this work were in the analysis script
+(§7).
+
+<details>
+<summary><b>What the columns mean, and how truth is defined</b></summary>
+
+- **dist** — RMS distance from the reference value, mV.
 - **delay** — the time shift that best lines the estimate up: the effective lag
   in picking up change. Aggregate, and immune to the blip-chasing that corrupts
   per-level crossing times (§2).
-- **resid** — RMS once that delay is removed: the error that is *not* lag.
+- **resid** — RMS once that delay is removed: the error that is *not* lag. This
+  is what separates "late" from "wrong shape".
 - **SCORE** — duration-weighted mean dist. The single number to minimise.
 
-**Reading it in one line: `new` is 13% closer to the truth than `old` overall,
-and its fill error is almost entirely delay rather than mis-shape.** Remove the
-10-minute delay and the fill distance drops 13.4 → 3.4 mV — better shape than
-raw itself (8.7 mV). The ladder is reconstructing the recharge curve accurately;
-it is just doing so slightly late. On drawdown it has **zero** delay where the
-old method has 2 minutes.
+Truth is the best available hindsight reconstruction, chosen per regime.
+**Fills → the double-exponential physics curve** fitted to quiet-zone anchors;
+being a two-amplitude fit to a few exact points it is independent of raw's
+noise, so raw gets no structural advantage. **Drawdown → a centred zero-lag fit
+of raw**, because no physics curve exists there (demand is unknown): centred so
+a trailing estimator is penalised, order-2 so the 7200 mV/h drop is not smeared
+into a slope the well never had.
 
-Read **raw as the floor, not a competitor**: it has zero delay by definition, so
-its dist is pure quantization noise — the budget the smoothers work against.
-What smoothing buys (a monotone, readable trace) is not scored here; that is
-§5, where `new` is perfectly monotone at 1.00 against raw's 4.17.
+Two things to know before using SCORE as an optimisation target:
 
-The ranking is stable across hindsight-window choices from 11 to 61 min, and the
-physics reference validates: on the clean fill it agrees with the centred
-reconstruction to 6.6 mV, exactly the model's own anchor residual. The 01 Aug
-fill is excluded — truncated by a second drawdown, its fit residual is 25.9 mV,
-so there the *reference* is the unreliable party.
+- **Raw is the floor, not a competitor.** Zero delay by definition, so it wins
+  on vertical distance; 10.9 is the quantization noise budget the smoothers work
+  against. What smoothing buys — the monotone trace, §5, 1.00 vs raw's 4.17 —
+  is not on this axis, so optimising SCORE alone converges on raw.
+- **Only 22.2 of the 40 fill hours are scored.** The 01 Aug fill was truncated
+  by a second drawdown and its own fit residual is 25.9 mV, so there the
+  *reference* is the unreliable party. Excluded rather than allowed to pollute
+  the number.
 
-**No defect was found in the deployed estimator.** The integration code has not
-been changed since 30 July (`c4e1b26`), so these figures describe exactly what
-ran over the weekend. Two bugs *were* found and fixed in the analysis script
-during this work — see §7.
+Validation: where both references exist they agree to 6.6 mV — exactly the
+model's own anchor residual. The ranking is stable across hindsight windows from
+11 to 61 min, so it is not an artefact of that choice.
+</details>
 
 <details>
 <summary>Older headline table (lag by level crossing) — superseded, kept for continuity</summary>
