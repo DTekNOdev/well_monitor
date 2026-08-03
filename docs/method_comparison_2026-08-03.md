@@ -13,10 +13,19 @@ on the July capture, and it had never seen this cycle.
 | | new (ladder) | old (EMA) |
 |---|---|---|
 | Drawdown lag, median | **0.0 min** | 1.4 min |
-| Drawdown lag, worst | **5 min** | 558 min |
+| Drawdown lag, p90 | **0.0 min** | 9.3 min |
 | Fill lag, median | **11.0 min** | 16.0 min |
+| Fill lag, p90 | **27.0 min** | 31.0 min |
 | Agreement with model (best fill, rms) | **13.3 mV** | 20.9 mV |
 | Smoothness (best fill) | **1.00** | 1.05 |
+
+(Maxima are deliberately omitted — see the warning in §2. They measure
+transient-blip chasing, not lag.)
+
+**No defect was found in the deployed estimator.** The integration code has not
+been changed since 30 July (`c4e1b26`), so these figures describe exactly what
+ran over the weekend. Two bugs *were* found and fixed in the analysis script
+during this work — see §6.
 
 The new method is **effectively lag-free on drawdown** while being at least as
 smooth as the old one. That was the design goal and it holds on unseen data.
@@ -67,11 +76,22 @@ resolution:
 
 Reading this: on drawdown the new method is *exactly* current — zero lag at
 every level through the fastest hour, because a multi-step drop bypasses the
-model and tracks raw directly. The old method's 558-minute pooled maximum is
-not a typo but is partly an artefact: with a heavily-smoothed signal, a level
-that raw passed early can be re-crossed much later, so the extreme tail
-overstates the practical delay. Its median of 1.4 min and p90 of 9.3 min are
-the honest everyday figures.
+model and tracks raw directly.
+
+> ⚠️ **Ignore the `max` column — it does not measure lag.** The metric asks
+> "when did each series *first* reach level L", and raw frequently touches a
+> level once as a transient blip and falls back for hours. Both maxima are
+> artefacts of that, not delays:
+>
+> - **new, 149 min on the 01 Aug fill at 7.30 V** — raw blipped to 7.30 at
+>   21:29, then oscillated between 7.18 and 7.30 for two hours and only settled
+>   above it at ~23:40. The ladder crossed at 23:58. Declining to chase that
+>   spike is exactly what the estimator is *for*; the metric charged it 149
+>   minutes for being right. The old method scored 146 min on the same level.
+> - **old, 558 min on the first drawdown** — same mechanism in reverse.
+>
+> Use **median and p90** for lag. They are dominated by levels raw crossed
+> cleanly, and they are the figures to compare week on week.
 
 Fill lag of ~11 min for the new method is *by design*, not a defect — the
 estimator deliberately waits for boundary-crossing evidence before moving, and
@@ -147,13 +167,31 @@ clean one.
    waiting for crossing evidence. Worth revisiting only if it proves
    practically limiting.
 
+## 6. Analysis bugs found while producing this report
+
+Both were in `analysis/report_two_methods.py`, written for this report — not in
+the integration. Recorded because they would otherwise recur next week.
+
+- **Segmentation spanned a reversal.** A naive peak → trough → end split put
+  the 02 Aug drawdown *inside* the "fill", so the single fitted curve and every
+  error figure were meaningless (1006 mV "errors"). Now segmented with a
+  zigzag on 300 mV reversals, which correctly finds 2 drains and 3 fills.
+- **The curve fit degenerated.** Unbounded, the slow exponential always
+  improves the fit by flattening into a linear term: it ran to tau = 20,407 h
+  and V_top = 194 V — an excellent fit to a meaningless model. The search is
+  now bounded to tau ≤ 72 h with the asymptote within 1 V of the data, and
+  rejects negative amplitudes.
+- **Maxima were quoted as lag** in the first draft. Corrected in §2; they
+  measure blip-chasing.
+
 ## For next week's comparison
 
 Re-run `python analysis/report_two_methods.py` against the new export and
 compare against this file. The figures to watch:
 
 - **drain pooled median / p90 lag** — should stay at 0.0 / 0.0 for the new method
-- **fill pooled median lag** — currently 11.0 min; the number to try to reduce
+- **fill pooled median / p90 lag** — currently 11.0 / 27.0 min; the numbers to
+  try to reduce. Do *not* compare maxima (§2).
 - **best-fill model rms** — 5.9 mV here; a rise suggests the taus are drifting
   seasonally and want refitting
 - **best-fill smoothness** — 1.00 here; anything above ~1.1 means quantization
